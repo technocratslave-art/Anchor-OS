@@ -1,6 +1,6 @@
 TL;DR (What problems this actually fixes)
 
-Anchor OS exists to allow on base for Distro forks, drift, and security collapse in systems that try to be both secure and flexible.
+Anchor OS exists to allow ONE BASE for Distro forks, drift, and security collapse in systems that try to be both secure and flexible.
 
 Fork problem (primary):
 Traditional “secure” systems eventually fork because people need exceptions. Once runtime mutability, plugin systems, or policy toggles exist, downstreams diverge, patches stop flowing, and security assumptions rot.
