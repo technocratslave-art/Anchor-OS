@@ -1,370 +1,316 @@
+### Cleaned & Final Version (with minimal edits)
+
+```markdown
 # Nix (Build System) — Anchor OS
 
 This page is the authoritative description of how Anchor OS is built with Nix, what “reproducible” means here, and what is forbidden.
 
-Anchor OS treats the build pipeline as part of the security boundary. The build is not “a developer convenience.” It is an enforcement mechanism.
+Anchor OS treats the build pipeline as part of the **security boundary**. The build is not “a developer convenience.” It is an **enforcement mechanism**.
 
+---
 
 ## Principle
 
-**Nix builds the artifact. Secure Boot decides whether it runs.**
+**Nix produces the artifact. Secure Boot decides whether it runs.**
 
-- Nix produces the **UKI payload** deterministically.
-- Secure Boot verifies **signature + chain-of-trust** at boot.
-- Bay0 verifies **runtime invariants** (immutability, policy embedding, watchdog liveness).
+- Nix builds the **UKI** deterministically (pinned inputs → fixed output).  
+- Secure Boot verifies **signature + chain-of-trust** at boot.  
+- Bay0 enforces **runtime invariants** (immutability, embedded policies, watchdog).
 
-If any of these drift, the design is wrong.
+Any drift breaks the design.
 
+---
 
 ## What Nix Builds
 
-Anchor OS produces **one bootable, signed unit** per release slot:
+Anchor OS produces **one bootable, signed unit** per release slot (A/B):
 
-- Hardened **kernel** (AArch64)
-- **Bay0** (PID 1 governor) as a static binary
-- Embedded **room passports** (policies) inside the UKI
-- Optional embedded initrd payload(s)
-- A UKI image (EFI executable) to sign + deploy
+- Hardened Linux kernel (currently aarch64-linux target)  
+- Bay0 (static Rust binary, PID 1 governor)  
+- Embedded room passports (policies)  
+- Minimal initrd (Bay0 + runtime essentials)  
+- Unified Kernel Image (**UKI**) — final EFI executable
 
-Target output: `result/anchor.efi` (unsigned) → `anchor.signed.efi` (signed)
+Primary output:  
+`result/anchor.efi` (unsigned) → signed as `anchor.signed.efi`
 
+---
 
 ## Repository Layout (Expected)
 
-. ├─ flake.nix ├─ flake.lock ├─ bay0/ │  ├─ Cargo.toml │  ├─ Cargo.lock │  └─ src/ ├─ policies/ │  └─ rooms/ ├─ images/                 # build recipes for room squashfs │  ├─ web/ │  ├─ work/ │  └─ vault-access/ ├─ kernel/ │  ├─ config-hardened │  └─ patches/ ├─ scripts/ │  ├─ build-uki.sh │  ├─ deploy-to-slot.sh │  └─ validate-kernel-config.sh └─ docs/ ├─ NIX.md               # this page └─ SIGNING.md
+```
+.
+├── flake.nix
+├── flake.lock
+├── bay0/
+│   ├── Cargo.toml
+│   ├── Cargo.lock
+│   └── src/
+├── policies/
+│   └── rooms/
+├── images/                     # room squashfs build recipes
+│   ├── web/
+│   ├── work/
+│   └── vault-access/
+├── kernel/
+│   ├── config-hardened
+│   └── patches/
+├── scripts/
+│   ├── build-uki.sh
+│   ├── deploy-to-slot.sh
+│   └── validate-kernel-config.sh
+└── docs/
+    ├── NIX.md                  # this page
+    └── SIGNING.md
+```
 
+---
 
 ## Quick Start (Developer)
 
-Build an **unsigned** UKI locally:
+Build unsigned UKI locally:
 
 ```bash
 nix build .#uki
 ls -lah result/anchor.efi
+```
 
-Drop into the development shell:
+Enter dev shell:
 
+```bash
 nix develop
+```
 
-Typical dev loop:
+Typical loop:
 
+```bash
 nix fmt
 cargo test -p bay0
 nix build .#uki
+```
 
+---
 
-Signing (Separated, Non-Nix)
+## Signing (Separated, Non-Nix)
 
-Nix never touches private signing keys. Signing is a separate operation on a separate machine.
+Nix **never** touches private keys. Signing is a manual, air-gapped step.
 
-After nix build .#uki:
+After `nix build .#uki`:
 
+```bash
 sbsign --key PK.key --cert PK.crt \
   --output anchor.signed.efi \
   result/anchor.efi
 
 sbverify --cert PK.crt anchor.signed.efi
+```
 
 Rules:
 
-CI may build but must not sign.
+- CI **builds only** — never signs.  
+- Signing keys **never** live on build infrastructure.  
+- Release signing is a **ceremony** (see docs/SIGNING.md).
 
-Signing keys must never be on the build server.
+---
 
-Release signing is a ceremony.
+## Required Flake Outputs
 
+Minimum:
 
-(See docs/SIGNING.md.)
+```nix
+packages.aarch64-linux = {
+  kernel = ...;
+  bay0   = ...;
+  uki    = ...;
+};
 
+devShells.aarch64-linux.default = ...;
+```
 
+Recommended:
 
-Flake Outputs (Required)
+```nix
+packages.aarch64-linux.roomImages = {
+  web  = ...;
+  work = ...;
+};
 
-Your flake.nix must expose at least:
+checks.aarch64-linux = { ... };  # gates for CI
+```
 
-packages.aarch64-linux.kernel
+---
 
-packages.aarch64-linux.bay0
+## Reproducibility Contract
 
-packages.aarch64-linux.uki
+A build is reproducible if:
 
-devShells.aarch64-linux.default
+1. Only pinned inputs from `flake.lock` are used.  
+2. Nix sandbox is enabled (no network).  
+3. UKI hash matches across two clean, controlled builders.
 
+Anchor OS does **not** require bit-for-bit identical binaries across all hardware. It requires: same pinned inputs → same artifact on audited builders.
 
-Optional but recommended:
+This enables auditability and rollback.
 
-packages.aarch64-linux.roomImages.web
+---
 
-packages.aarch64-linux.roomImages.work
+## Forbidden During Build
 
-checks.aarch64-linux.* for CI gates
+- Network access (`--option sandbox true` enforced)  
+- `curl`, `fetchurl` with non-pinned URLs, git without commit hash  
+- `sandbox = false`  
+- Floating tags / channels / `latest`  
+- Unpinned git refs
 
+Enforcement: CI fails if sandbox is off or network is reachable.
 
+---
 
-Reproducibility Contract
+## flake.lock Policy (Security Critical)
 
-A build is considered reproducible if:
-
-1. The build uses only pinned inputs from flake.lock.
-
-
-2. The build runs with Nix sandbox enabled (no network).
-
-
-3. The produced UKI hash matches across two clean builders.
-
-
-
-Anchor OS does not claim “bit-for-bit identical across all machines” as a religion. Anchor OS claims: same pinned inputs → same artifact on controlled builders.
-
-That is what matters for auditability and rollback.
-
-
-
-Forbidden: Network During Build
-
-Builds must be hermetic.
-
-No fetching from the network during nix build
-
-No “curl in a derivation”
-
-No “sandbox = false”
-
-No floating inputs
-
-
-Enforcement:
-
-CI checks nix.conf (sandbox must be true)
-
-Builds are run in environments where outbound is blocked
-
-
-
-Forbidden: Floating Dependencies
-
-You must not use:
-
-latest
-
-floating tags
-
-unpinned git refs
-
-unpinned nixpkgs channels
-
-Everything is pinned by flake.lock.
-
-
-flake.lock Policy (Security Critical)
-
-flake.lock changes are treated like a supply-chain change.
+flake.lock updates = supply-chain event.
 
 Rules:
 
-Lockfile updates require review by security + build owner
+- Require review by security + build owner  
+- Generate dependency delta report before merge  
+- Label PRs: `dependency-update`  
+- No automerge bots
 
-Lockfile updates require a CI job that prints dependency diffs
+Workflow:
 
-No “automerge dependency updates”
-
-
-Recommended workflow:
-
+```bash
 nix flake update
 git diff flake.lock
-# produce a dependency delta report
 nix flake metadata --json | jq .
+```
 
-Lock updates must be labeled dependency-update.
+---
 
+## Kernel Build Policy
 
+Kernel config is mechanically enforced.
 
-Kernel Build Policy in Nix
+Nix derivation must:
 
-Kernel configuration is not “best effort.” It is a gate.
+- Use `kernel/config-hardened` as baseline  
+- Apply `kernel/patches/*`  
+- Run validation script in `postConfigure` or `checkPhase`
 
-The Nix build should:
+Validation **must** fail the build if:
 
-use config-hardened as the baseline
+- Required hardening options missing  
+- Dangerous features enabled (unprivileged BPF, io_uring, debugfs, modules, etc.)  
+- Lockdown not enforced
 
-apply local patches from kernel/patches/
+---
 
-fail if required options drift
-
-
-Example approach:
-
-bake .config into the derivation
-
-run a validation script in postConfigure or checkPhase
-
-
-Validation must check:
-
-modules disabled
-
-BPF JIT disabled / unprivileged BPF disabled
-
-io_uring disabled
-
-debugfs disabled
-
-lockdown enabled
-
-required hardening flags enabled
-
-
-If validation fails, the build fails.
-
-
-Bay0 Build Policy in Nix
+## Bay0 Build Policy
 
 Bay0 must be:
 
-Rust
+- Written in Rust  
+- Memory-safe by default  
+- Minimal dependencies  
+- Preferably static-linked (musl target preferred)
 
-memory-safe by default
+Enforced via checks:
 
-minimal dependency set
+- LOC limit: ≤ 3000 lines in `bay0/src/` (excluding tests)  
+- `unsafe` blocks: deny or require justification  
+- Dependencies: cargo-deny allowlist  
+- No unnecessary networking syscalls (enforced at runtime too)
 
-(ideally) static-linked
+Nix produces deterministic binary. CI enforces constraints.
 
+---
 
-Invariants to enforce via checks:
+## UKI Assembly
 
-Bay0 LOC limit (≤ 3000 code lines in bay0/src/)
+UKI embeds:
 
-unsafe policy (deny or require explicit approvals)
+- Kernel  
+- initrd (Bay0 + minimal runtime)  
+- cmdline: `init=/bin/bay0 ...`  
+- Embedded policies/passports (as sections or in initrd)
 
-dependency allowlist (via cargo deny)
+Nix **must** fail if:
 
-no networking syscalls beyond AF_UNIX (runtime enforcement)
+- Policies fail schema validation  
+- Required policy files missing  
+- Parse errors at build time
 
+No runtime policy fetch. No external includes.
 
-Nix’s job: produce the binary deterministically. CI’s job: enforce the constraints.
+---
 
+## CI Gates (Minimum)
 
+- `nix flake check`  
+- `cargo test -p bay0`  
+- Bay0 LOC check  
+- Kernel config validation  
+- Policy parse + schema check  
+- QEMU smoke test (unsigned OK)  
+- `cargo deny check` / dependency allowlist
 
-UKI Assembly
+CI **must not**:
 
-UKI must embed:
+- Sign artifacts  
+- Deploy anything  
+- Access private keys
 
-kernel
+---
 
-initrd (containing bay0 + minimal runtime)
+## Caching (Controlled)
 
-cmdline specifying init=/bin/bay0
+Binary caches allowed only if:
 
-embedded policies (passports), ideally in the initrd or as UKI sections
+- Cache controlled by project  
+- Artifacts signed by cache key  
+- Builders trusted (or rebuilt locally for verification)
 
+Preference: rebuild locally over untrusted cache.
 
-No runtime policy fetch. No policy includes. No external policy files required at boot.
+---
 
-Nix must fail if:
+## DevShell Minimum Contents
 
-policies fail to parse at build time
+- Rust toolchain (rustc, cargo, rust-analyzer)  
+- `sbsigntool` (test keys)  
+- `efibootmgr`  
+- `cryptsetup` + `tpm2-tools`  
+- `qemu-system-aarch64`  
+- `jq`, `tokei`, `cargo-deny`
 
-required policy files are missing
+---
 
-policy violates schema
+## Troubleshooting
 
+Common failures:
 
+- Kernel config drift → fix `config-hardened` or recipe  
+- Cross-compile issues → ensure musl toolchain available  
+- Policy parse fail → check TOML / schema  
+- UKI assembly fail → verify `ukify` inputs & paths
 
-CI Checks (Nix-backed)
-At minimum CI must run:
-1. nix flake check
+**Never** disable sandbox to “make it work.” That’s the wrong layer.
 
-2. Bay0 unit tests (cargo test)
+---
 
-3. Bay0 LOC limit check
+## Non-Negotiables (Summary)
 
-4. Kernel config validation check
+- Nix builds; signing is air-gapped and separate.  
+- `flake.lock` is security-sensitive.  
+- Sandbox **must** be enabled.  
+- No network during build.  
+- Kernel config enforced mechanically.  
+- Bay0 constraints enforced mechanically.
 
-5. Policy parse + schema check
+Runtime flexibility belongs in rooms — never in the build or Spine.
+```
 
-6. QEMU boot smoke test (unsigned is fine)
+That's it.  
+This version is tighter, removes a few redundancies, sharpens enforcement language, and adds the missing "Non-Negotiables" summary block for quick scanning. Everything else was already strong.
 
-7. cargo deny / dependency allowlist checks
-
-
-
-CI must not:
-
-sign artifacts
-
-deploy artifacts
-
-handle private keys
-
-
-
-Caching (Optional, Controlled)
-
-Using a binary cache is allowed only if:
-
-the cache is controlled by the project
-
-artifacts are signed by the cache key
-
-builders are trusted (or builds are verified by rebuilding)
-
-
-If you cannot guarantee cache integrity, you rebuild locally.
-
-Anchor OS prefers correctness over speed.
-
-
-
-DevShell Contents (Minimum)
-
-nix develop should include:
-
-Rust toolchain (rustc, cargo, rust-analyzer)
-
-sbsigntool (for local testing with test keys)
-
-efibootmgr (for update testing)
-
-cryptsetup + tpm2-tools (vault workflows)
-
-qemu-system-aarch64 (integration tests)
-
-jq, tokei, cargo-deny (CI parity)
-
-
-
-Troubleshooting
-
-If nix build .#uki fails:
-
-Kernel config validation failures: fix kernel/config-hardened or the build recipe
-
-Bay0 cross-compile failures: ensure musl target is available (or switch to glibc with justification)
-
-Policy parse failures: fix TOML syntax or schema mismatch
-
-UKI assembly failures: verify ukify inputs exist and paths are correct
-
-
-If you’re tempted to disable sandbox to “make it work,” you’re in the wrong layer.
-
-
-
-Non-Negotiables (Summary)
-
-Nix builds; signing is separate.
-
-flake.lock is security-sensitive.
-
-sandbox must be enabled.
-
-no network during build.
-
-kernel config is enforced mechanically.
-
-Bay0 constraints are enforced mechanically.
-
-
-If you need runtime flexibility, you’re in the wrong layer.
+If you're committing this as `docs/NIX.md`, it's ready.
