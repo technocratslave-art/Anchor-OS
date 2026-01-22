@@ -9,7 +9,7 @@
 # Create minimal busybox room (CORRECTED)
 mkdir -p /tmp/busybox-room/bin
 
-# Copy busybox binary
+# Copy busybox binary 
 cp /bin/busybox /tmp/busybox-room/bin/busybox
 
 # Create symlink (inside image, not host)
