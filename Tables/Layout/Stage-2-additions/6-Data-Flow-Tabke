@@ -1,0 +1,300 @@
+Here is the **Data Flow Table** — the security-critical map for **cross-room data movement** in Anchor OS v1.5.
+
+This table defines **every allowed path** that data can take between rooms (or from room to Vault/host).  
+**Rule:** If a data path is not listed in this table, **it does not exist**.  
+No ambient channels. No implicit flows. No undocumented shortcuts.  
+Every path must have a named mechanism, directionality, consent point, and audit trail.
+
+| Source                          | Destination                     | Mechanism                              | Direction          | User Consent Point                          | Logging / Audit Trail                                                                 | Notes / Invariant Enforced |
+|---------------------------------|---------------------------------|----------------------------------------|--------------------|---------------------------------------------|---------------------------------------------------------------------------------------|----------------------------|
+| Room A (any)                    | Room B (any)                    | Courier (one-shot process)             | A → B (one-way)    | Explicit prompt on first use in session     | bay0 logs: timestamp, source room ID, dest room ID, file size, SHA256 hash, result (success/fail) | #6 Cross-Room Data Flow, #7 Ambient IPC |
+| Room A (any)                    | Vault (subvolume)               | Courier (one-shot process)             | Room → Vault       | Explicit prompt on first use in session     | bay0 logs: timestamp, room ID, vault subvolume path, file size, SHA256 hash, result | #6 Cross-Room Data Flow, #10 Vault Access |
+| Vault (subvolume)               | Room A (any)                    | Explicit bind-mount (read-only or RW)  | Vault → Room       | Passport declaration + one-time prompt      | bay0 logs mount event (room ID, source subvolume, readonly flag)                     | #9 Persistent Mounts, #10 Vault Access |
+| Room A (any)                    | Shared Drop Box                 | Write-only shared folder mount         | Room → Drop Box    | Passport declaration + one-time write consent | bay0 logs: timestamp, room ID, shared folder name, file size, SHA256 hash           | #8 Shared Folders, #6 Cross-Room Data Flow |
+| Room B (any)                    | Shared Drop Box                 | Read-only shared folder mount          | Drop Box → Room    | Passport declaration (read-only default)    | bay0 logs read event (room ID, shared folder name, file size)                       | #8 Shared Folders |
+| Room A (any)                    | Clipboard Channel (named)       | Session clipboard (named channel)      | A → Channel        | Explicit copy action                        | bay0 logs: timestamp, source room ID, channel name, data size (text only)           | #7 Ambient IPC, #6 Cross-Room Data Flow |
+| Room B (any)                    | Clipboard Channel (named)       | Session clipboard (named channel)      | Channel → B        | Explicit paste action + source check        | bay0 logs: timestamp, dest room ID, channel name, data size (text only)             | #7 Ambient IPC, #6 Cross-Room Data Flow |
+| Host / Bay0                     | Room A (any)                    | Explicit bind-mount (host export, e.g. /etc/anchor/host) | Host → Room        | Passport declaration (read-only)            | bay0 logs mount event (room ID, host path, readonly flag)                           | #13 Device Access, #12 Network Access (metadata only) |
+| Room A (any)                    | Host / Bay0                     | Courier (one-shot process)             | Room → Host        | Explicit prompt on first use in session     | bay0 logs: timestamp, room ID, destination (host/USB), file size, SHA256 hash, result | #6 Cross-Room Data Flow, #7 Ambient IPC |
+| Room A (any)                    | Network (WAN/LAN)               | veth pair + net-gateway room           | Room → Internet    | Passport declaration (network mode)         | bay0 logs: timestamp, room ID, network mode, bytes sent/received, destination IP/port (if allowed) | #12 Network Access, #6 Cross-Room Data Flow |
+| Network (WAN/LAN)               | Room A (any)                    | veth pair + net-gateway room           | Internet → Room    | Passport declaration (network mode)         | bay0 logs: timestamp, room ID, network mode, bytes sent/received, source IP/port (if allowed) | #12 Network Access, #6 Cross-Room Data Flow |
+
+### Additional Rules & Enforcement Notes (Mandatory)
+
+- **No path without a row** — if a data flow is not in this table, it is forbidden.
+- **Directionality is strict** — no bidirectional flows except via explicit courier (which dies after use).
+- **Consent point is mandatory** — every path must have a user-visible consent step (prompt, passport declaration, one-time toggle).
+- **Logging is always bay0-level** — no room can see or modify logs.
+- **Courier is the only universal path** — all other paths are scoped and one-way by nature.
+- **Network path is mediated** — all external traffic routes through net-gateway room (veth pair + nftables).
+
+### Why This Table Prevents Covert Channels
+
+- **No bidirectional ambient flow** — no shared memory, no persistent pipes, no global clipboard.
+- **No silent exfil** — every cross-room or external transfer is logged, scoped, and consented.
+- **No hidden paths** — every possible data movement is enumerated and constrained.
+- **No escalation** — even if a room is compromised, it can only use the paths it was explicitly allowed.
+
+This table is now part of the constitution.  
+Any data flow not listed here **does not exist** in v1.5.
+_______________________
+Yeah. This is the missing map—and it’s tight.
+
+Short answer first: the Data Flow Table is correct, coherent with the constitution, and closes the last major class of “implicit channel” failures. It finally turns “no ambient authority” from a slogan into a mechanically checkable graph.
+
+Now the exhaustive read, in two parts: what it says and what it deliberately does not say (and whether anything should be added).
+
+
+---
+
+What the Data Flow Table says (precisely)
+
+1. Data movement is a finite graph, not an emergent property
+
+By enumerating every allowed edge (Room↔Room, Room↔Vault, Room↔Host, Room↔Network), you’ve converted data flow from “whatever the kernel allows” into constitutional law.
+
+This is critical:
+
+If it’s not a row, it’s not a syscall debate.
+
+It’s simply illegal by definition.
+
+
+This aligns cleanly with:
+
+Invariant #6 (Cross-Room Data Flow)
+
+Invariant #7 (No Ambient IPC)
+
+Invariant #10 (Vault Access)
+
+
+
+---
+
+2. Courier is the only general-purpose transfer primitive
+
+Every flexible flow (room↔room, room↔vault, room↔host) collapses onto Courier, which has three defining properties:
+
+one-shot
+
+directional
+
+auditable
+
+
+This kills:
+
+persistent pipes
+
+background sync
+
+“just mount it” shortcuts
+
+
+And it directly closes the Lazy Courier / bridge-script class of attacks from the War Room.
+
+
+---
+
+3. Directionality is asymmetric on purpose
+
+You’ve been very careful here:
+
+Vault → Room: bind-mount, explicit, usually RO
+
+Room → Vault: courier only
+
+Shared Drop Box: write-only from producer, read-only from consumer
+
+Clipboard: explicit copy/paste, channel-scoped
+
+
+This asymmetry is what prevents lateral movement and silent overwrite attacks. It also ensures that reading data is never equivalent to writing authority.
+
+
+---
+
+4. Consent is attached to edges, not identities
+
+Consent is not “the room is trusted” or “the user is admin.”
+
+It’s:
+
+first-use prompt
+
+passport declaration
+
+explicit action (copy, paste, promote)
+
+
+That’s exactly right. It prevents both:
+
+long-lived ambient consent
+
+privilege inheritance
+
+
+And it maps perfectly to the Capability Lifecycle Table.
+
+
+---
+
+5. Logging is centralized and untouchable
+
+Every flow is logged at bay0 level, not in the room.
+
+This matters more than it looks like:
+
+Compromised rooms cannot erase evidence
+
+Logs reflect intentional flows, not packet noise
+
+Auditing stays aligned with the capability graph
+
+
+You’ve avoided the classic mistake of “security logs live with the attacker.”
+
+
+---
+
+6. Network is treated as just another hostile room
+
+This is subtle and correct:
+
+Network I/O is not a special case
+
+It’s mediated through a net-gateway room
+
+Logged as a data flow with mode + bytes + endpoints
+
+
+This means WAN access doesn’t magically gain file authority, Vault visibility, or IPC. It’s just another constrained edge.
+
+
+---
+
+What the table does not say (and why that’s mostly good)
+
+1. No implicit filesystem flows (good)
+
+There is no row for:
+
+shared /tmp
+
+shared /dev/shm
+
+shared page cache
+
+kernel keyrings
+
+
+This is correct. Those absences are not omissions—they are explicit denials enforced elsewhere (namespaces, mount isolation, seccomp).
+
+Nothing to add here.
+
+
+---
+
+2. No background synchronization or watchers (very good)
+
+There is no:
+
+file watcher
+
+sync daemon
+
+auto-import/export
+
+“helpful” mirroring
+
+
+This is what keeps the system from becoming a vibe-based OS again.
+
+Also correct.
+
+
+---
+
+3. No bidirectional “live” channels (essential)
+
+Even clipboard is split into:
+
+explicit copy
+
+explicit paste
+
+
+There is no “live shared buffer,” no stream, no socket bridge.
+
+Correct. Do not add any.
+
+
+---
+
+4. No time-based or size-based side channels listed (intentional)
+
+You do not try to model:
+
+timing inference
+
+power analysis
+
+cache contention
+
+
+That’s fine. Those are out of scope for v1.5 and belong to hardware/side-channel research, not OS policy tables.
+
+Good boundary discipline.
+
+
+---
+
+One thing you might add (optional, but clean)
+
+There is one row you could add, not because something is missing, but because it would make audits even clearer:
+
+Optional addition: Room → Dropzone (local, no promotion)
+
+You already imply this, but you could make it explicit as its own row:
+
+Source	Destination	Mechanism	Direction	Consent	Logging	Notes
+
+Room A	Dropzone (scoped)	Write-only bind-mount	Room → Dropzone	Passport + one-time consent	bay0 logs write metadata	Output sink only; unreadable by room
+
+
+This doesn’t change behavior—it just makes the one-way sink explicit for reviewers.
+
+If you leave it implicit, that’s still acceptable, because it’s already covered by Shared Drop Box semantics.
+
+
+---
+
+Final verdict
+
+This Data Flow Table:
+
+Completes the constitution
+
+Closes covert channels
+
+Survives the War Room
+
+Is mechanically enforceable
+
+Gives auditors a finite checklist
+
+
+Most importantly, it forces anyone proposing a feature to answer a deadly simple question:
+
+> “Which row does this data flow use?”
+
+
+
+If they can’t point to one, the answer is already no.
+
+You’re done.
+
+The graph is closed.
+The edges are named.
+The silence is intentional.
