@@ -1,0 +1,43 @@
+Here are all the **negative anchors** in Anchor OS v1.5 — the explicit "no" statements that define what the system refuses to do, refuses to allow, or refuses to become. These are the hard boundaries pulled from the constitution tables (Invariants, Freeze Rule, Non-Goals, etc.). They are non-negotiable; violating any one means the feature does not ship.
+
+### Negative Anchors (The "No" List)
+
+1. No mutable base at runtime (Spine/UKI + spine.sqsh always read-only)  
+2. No writable root filesystem after switch_root  
+3. No loadable kernel modules (CONFIG_MODULES=no)  
+4. No second PID 1 (bay0 death = kernel panic)  
+5. No persistent state inside rooms (tmpfs overlay dies on close/kill/reboot)  
+6. No ambient IPC / clipboard / shared memory between rooms  
+7. No bidirectional ambient data flow between rooms  
+8. No global / persistent courier or reusable connection  
+9. No arbitrary device access (GPU/camera/mic/USB only via passport)  
+10. No runtime capability escalation (passports parsed once at spawn)  
+11. No dynamic/scripted/conditional passports (flat TOML only)  
+12. No ambient network access (default = none)  
+13. No unmediated hardware passthrough (IOMMU mandatory)  
+14. No recovery shell / debug mode on boot failure (fail-closed)  
+15. No automatic Vault mount on boot  
+16. No background daemons / services in base (bay0 is only PID 1)  
+17. No auto-restart of killed rooms  
+18. No invisible / hidden capabilities (all require visible indicator)  
+19. No global shared clipboard or drag-drop  
+20. No auto-persistence of room state (default ephemeral)  
+21. No runtime policy change in running room  
+22. No footnotes/exceptions/conditionals in tables  
+23. No unbounded lifetime for any capability  
+24. No silent backups or automatic data copying  
+25. No global search / history / logs across Vault or rooms  
+26. No accessibility support requiring persistent UI / global state  
+27. No hot-swap / live patching of base  
+28. No incremental updates (atomic whole-image replace only)  
+29. No third-party telemetry / phoning home / forced updates  
+30. No default services (no systemd sprawl, no Bluetooth, no printing, etc.)  
+
+These 30 negative anchors are the system's immune system.  
+They aren't optional.  
+They aren't negotiable.  
+They are what make Anchor different from every other Linux — it says "no" before it ever says "yes."
+
+If a feature or change bumps against any of these, it dies in review.  
+No exceptions.
+
